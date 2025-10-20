@@ -238,7 +238,7 @@ static void goto_application(void)
 	printf("Jumping to Application\n");
 
 	void (*app_reset_handler) (void) = (void*)(*(volatile uint32_t *)(0x08020000 + 4));
-	__set_MSP( (*(volatile uint32_t *)(0x08020000 + 4)) );
+	__set_MSP( (*(volatile uint32_t *)(0x08020000)) );
 	HAL_GPIO_WritePin( GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); //LED off
 	app_reset_handler(); //Call app reset handler
 }
