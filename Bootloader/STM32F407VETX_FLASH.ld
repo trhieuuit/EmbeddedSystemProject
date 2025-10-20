@@ -47,7 +47,11 @@ MEMORY
 {
   CCMRAM    (xrw)    : ORIGIN = 0x10000000,   LENGTH = 64K
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 128K
-  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 512K
+  FLASH_BOOTLOADER  (rx) : ORIGIN = 0x08000000, LENGTH = 64K    /* Sector 0–3 */
+  FLASH_CONFIG      (rx) : ORIGIN = 0x08010000, LENGTH = 64K    /* Sector 4 */
+  FLASH_SLOT_A      (rx) : ORIGIN = 0x08020000, LENGTH = 128K   /* Sector 5 */
+  FLASH_SLOT_B      (rx) : ORIGIN = 0x08040000, LENGTH = 128K   /* Sector 6 */
+  FLASH_RESERVED    (rx) : ORIGIN = 0x08060000, LENGTH = 128K   /* Sector 7 */
 }
 
 /* Sections */
