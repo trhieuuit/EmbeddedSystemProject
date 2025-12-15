@@ -1,0 +1,10 @@
+../Core/Src/etx_ota_update.c:48:17:calculate_crc32	32	static
+../Core/Src/etx_ota_update.c:62:13:etx_ota_download_and_flash	80	static
+../Core/Src/etx_ota_update.c:138:20:etx_process_data	120	static
+../Core/Src/etx_ota_update.c:273:17:etx_receive_chunk	40	static
+../Core/Src/etx_ota_update.c:331:13:etx_ota_send_resp	32	static
+../Core/Src/etx_ota_update.c:342:26:write_data_to_slot	64	static
+../Core/Src/etx_ota_update.c:435:16:get_available_slot_number	80	static
+../Core/Src/etx_ota_update.c:456:26:write_data_to_flash_app	56	static
+../Core/Src/etx_ota_update.c:524:6:load_new_app	104	static
+../Core/Src/etx_ota_update.c:646:26:write_cfg_to_flash	64	static

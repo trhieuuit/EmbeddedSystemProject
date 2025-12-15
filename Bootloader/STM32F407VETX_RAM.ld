@@ -53,6 +53,7 @@ MEMORY
 /* Sections */
 SECTIONS
 {
+
   /* The startup code into "RAM" Ram type memory */
   .isr_vector :
   {
