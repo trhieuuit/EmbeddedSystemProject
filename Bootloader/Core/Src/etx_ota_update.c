@@ -105,8 +105,7 @@ ETX_OTA_EX_ etx_ota_download_and_flash( void )
       {
           printf("Too many errors/timeouts (%d). Aborting OTA...\r\n", MAX_OTA_RETRIES);
 
-          // [QUAN TRỌNG] Xóa cờ OTA REQUEST trong Flash trước khi Reset
-          // Nếu không làm bước này, Reset xong nó lại vào OTA Mode tiếp
+          //  Xóa cờ OTA REQUEST trong Flash trước khi Reset
           ETX_GNRL_CFG_ cfg;
           memcpy( &cfg, cfg_flash, sizeof(ETX_GNRL_CFG_) );
 
