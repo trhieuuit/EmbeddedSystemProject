@@ -91,7 +91,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
         char response[20];
         // Lấy từ biến toàn cục
-        sprintf(response, "Application Version:%d.%d\r\n", MAJOR, MINOR);
+        sprintf(response, "Application Version: %d.%d\r\n", MAJOR, MINOR);
 
         // Gửi phản hồi lại cho ESP32
         HAL_UART_Transmit(&huart2, (uint8_t*)response, strlen(response), 100);
