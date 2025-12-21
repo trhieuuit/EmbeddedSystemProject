@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FOTA Control Panel</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4; padding: 20px; display: flex; justify-content: center; }
+        .container { background: white; width: 100%; max-width: 500px; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: #333; margin-bottom: 20px; border-bottom: 2px solid #ddd; padding-bottom: 10px; }
+        .control-group { margin-bottom: 15px; }
+        label { font-weight: bold; display: block; margin-bottom: 5px; color: #555; }
+        select, button { width: 100%; padding: 12px; border-radius: 4px; font-size: 15px; box-sizing: border-box; }
+        select { border: 1px solid #ccc; margin-bottom: 10px; }
+        button { border: none; cursor: pointer; font-weight: 600; color: white; margin-bottom: 8px; transition: 0.2s; }
+        button:hover { opacity: 0.9; }
+        
+        /* Màu sắc các nút */
+        .btn-refresh { background-color: #007bff; }
+        .btn-check { background-color: #6c757d; }
+        .btn-update { background-color: #28a745; }
+        
+        /* --- NÚT RESET MỚI (MÀU ĐỎ) --- */
+        .btn-reset { background-color: #dc3545; margin-top: 5px; }
+
+        .terminal-window { margin-top: 20px; }
+        .terminal-header { background: #333; color: #fff; padding: 5px 10px; font-size: 12px; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+        #terminal { background-color: #000; color: #00ff00; font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; height: 300px; padding: 10px; overflow-y: auto; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px;}
+        /* Màu sắc log */
+        .log-err { color: #ff4444; font-weight: bold; }
+        .log-ok { color: #00cc00; font-weight: bold; }
+        .log-wait { color: #ffcc00; }
+        .log-result { color: #00ffff; font-weight: bold; } 
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>ESP32 FOTA CONTROL</h2>
+    <div class="control-group">
+        <label>Firmware List</label>
+        <button class="btn-refresh" onclick="refreshList()">Refresh List</button>
+        <select id="fileList"><option value="">-- List is empty --</option></select>
+    </div>
+    <div class="control-group">
+        <label>Actions</label>
+        <button class="btn-update" id="btnUpdate" onclick="sendCommand('UPDATE')">Start Update</button>
+        <div style="display: flex; gap: 10px;">
+            <button class="btn-check" id="btnCheck" style="flex: 1;" onclick="sendCommand('CHECK')">Check Version</button>
+            <!-- NÚT RESET MỚI -->
+            <button class="btn-reset" id="btnReset" style="flex: 1;" onclick="sendCommand('RESET')">Soft Reset</button>
+        </div>
+    </div>
+    <div class="terminal-window">
+        <div class="terminal-header">TERMINAL LOG</div>
+        <div id="terminal">System Ready...<br></div>
+    </div>
+</div>
+
+<script>
+    // --- CẤU HÌNH SUPABASE ---
+    const SUPABASE_URL = 'https://dugpttewrohmplazzfsi.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1Z3B0dGV3cm9obXBsYXp6ZnNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMyOTg5NDYsImV4cCI6MjA3ODg3NDk0Nn0.9o9WauB22L80viu2F8VqouzE38S5vUfiIaONZ2nJxbQ'; 
+    const BUCKET_NAME = 'app';
+    const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+     
+    let monitorInterval = null;
+
+    function log(msg, type='') {
+        const term = document.getElementById("terminal");
+        const time = new Date().toLocaleTimeString();
+        let cls = '';
+        if(type=='error') cls='log-err'; else if(type=='success') cls='log-ok'; else if(type=='wait') cls='log-wait'; else if(type=='result') cls='log-result';
+        term.innerHTML += `<span class="${cls}">[${time}] ${msg}</span><br>`;
+        term.scrollTop = term.scrollHeight;
+    }
+
+    async function refreshList() {
+        log("Fetching file list...");
+        const { data, error } = await client.storage.from(BUCKET_NAME).list('', { sortBy: { column: 'created_at', order: 'desc' } });
+        if (error) { log("Error: " + error.message, 'error'); return; }
+        const sel = document.getElementById("fileList"); sel.innerHTML = "";
+        let count = 0;
+        data.forEach(file => {
+            if (file.name.endsWith('.bin')) {
+                const opt = document.createElement("option");
+                opt.value = `${SUPABASE_URL}/storage/v1/object/public/${BUCKET_NAME}/${file.name}`;
+                opt.text = file.name; sel.add(opt); count++;
+            }
+        });
+        if(count===0) { const opt = document.createElement("option"); opt.text = "-- No .bin files --"; sel.add(opt); }
+        log(`Found ${count} files.`);
+    }
+
+    async function sendCommand(type) {
+        let payload = "";
+        if (type === 'UPDATE') {
+            const sel = document.getElementById("fileList");
+            if (!sel.value || sel.value.includes("--")) { log("Please select file!", 'error'); return; }
+            payload = sel.value;
+        }
+
+        // Disable buttons
+        document.getElementById("btnUpdate").disabled = true;
+        document.getElementById("btnCheck").disabled = true;
+        document.getElementById("btnReset").disabled = true; // Khóa nút Reset
+
+        log(`Sending command: ${type}...`, 'wait');
+        
+        // Gửi lệnh PENDING
+        const { data, error } = await client.from('commands').insert({ type: type, payload: payload, status: 'PENDING' }).select();
+
+        if (error) {
+            log("Send Failed: " + error.message, 'error');
+            enableButtons();
+        } else {
+            const cmdId = data[0].id;
+            log(`Command sent (ID: ${cmdId}). Waiting...`, 'wait');
+            waitForResult(cmdId);
+        }
+    }
+
+    function waitForResult(id) {
+        if(monitorInterval) clearInterval(monitorInterval);
+        let attempts = 0;
+        
+        monitorInterval = setInterval(async () => {
+            attempts++;
+            if(attempts > 30) { // Tăng timeout lên một chút cho lệnh Reset
+                clearInterval(monitorInterval); 
+                log("TIMEOUT: ESP32 did not respond!", 'error'); 
+                enableButtons(); 
+                return; 
+            }
+
+            const { data } = await client.from('commands').select('*').eq('id', id).single();
+            
+            if(data) {
+                if(data.status === 'DONE') {
+                    clearInterval(monitorInterval);
+                    
+                    const rawResponse = data.response;
+                    let responseText = "";
+                    let debugValue = "";
+
+                    if (typeof rawResponse === 'string') {
+                        let cleanedText = rawResponse;
+                        cleanedText = cleanedText.replace(/[\x00-\x1F\x7F]/g, ''); 
+                        responseText = cleanedText.trim();
+
+                        if (responseText.startsWith('"') && responseText.endsWith('"')) {
+                            responseText = responseText.substring(1, responseText.length - 1).trim();
+                        }
+                        debugValue = JSON.stringify(rawResponse);
+                    } else if (rawResponse !== null) {
+                        try { debugValue = JSON.stringify(rawResponse); } catch (e) { debugValue = `Error`; }
+                    } else { debugValue = 'NULL'; }
+
+                    if (responseText && responseText.toLowerCase() !== "null" && responseText.length > 0) {
+                        log("SUCCESSFUL: " + responseText, 'result'); 
+                    } else {
+                        log(`SUCCESSFUL. Raw: ${debugValue}`, 'success'); 
+                    }
+
+                    enableButtons();
+                } 
+                else if(data.status === 'ERROR') {
+                    clearInterval(monitorInterval);
+                    log("FAILED!", 'error');
+                    if (data.response) log("Reason: " + data.response, 'error');
+                    enableButtons();
+                }
+                else if(data.status === 'PROCESSING') {
+                    if(attempts % 5 == 0) log("ESP32 is processing...", 'wait');
+                }
+            }
+        }, 2000); 
+    }
+
+    function enableButtons() {
+        document.getElementById("btnUpdate").disabled = false;
+        document.getElementById("btnCheck").disabled = false;
+        document.getElementById("btnReset").disabled = false; // Mở lại nút Reset
+    }
+    window.onload = refreshList;
+</script>
+</body>
+</html>
