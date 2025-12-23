@@ -33,6 +33,7 @@ void loop() {
             checkCloudCommand();
             lastCheckTime = millis();
         }
+        checkUartAlerts();
     }
     ota_statemachine_handler();
 }

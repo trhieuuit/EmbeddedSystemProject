@@ -11,4 +11,7 @@ void Send_CMD_Reset();
 bool downloadFile(String url);
 uint32_t calculateCRC32(const uint8_t* data, size_t length);
 
+// Thêm hàm này
+void checkUartAlerts();
+
 #endif

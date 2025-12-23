@@ -173,7 +173,7 @@ void Send_CMD_Check_Version() {
         Serial.print("STM32 Responded: ");
         Serial.println(response);
 
-        if (response.startsWith("Application Version:")) {
+        if (response.startsWith("Ver:")) {
             Serial.println("[RESULT] STM32 OK!");
             updateCommandStatus(current_cmd_id, "DONE", response);
         } else {
@@ -187,10 +187,74 @@ void Send_CMD_Check_Version() {
     Serial.println("-----------------------------");
 }
 
+void checkUartAlerts() {
+    // 1. (IDLE)
+    // Để tránh xung đột dữ liệu UART khi đang nạp OTA
+    if (esp_ota_state != OTA_STATE_IDLE) return; 
+
+    // 2. Kiểm tra có dữ liệu từ STM32 gửi lên không
+    if (Serial2.available()) {
+        String msg = Serial2.readStringUntil('\n');
+        msg.trim(); // Xóa ký tự xuống dòng thừa
+        
+        String alertReason = "";
+        
+        if (msg.startsWith("ALERT:ROLLBACK_WDG")) {
+            alertReason = "STM32 Rollback: App Crash (Watchdog)";
+            Serial.println("[ALARM] " + alertReason);
+        } 
+        else if (msg.startsWith("ALERT:ROLLBACK_CRC")) {
+            alertReason = "STM32 Rollback: Update Failed/Power Loss";
+            Serial.println("[ALARM] " + alertReason);
+        }
+
+        // 4. Gửi lên Supabase nếu có cảnh báo hợp lệ
+        if (alertReason != "") {
+            // Kiểm tra xem có lệnh nào đang (hoặc vừa mới) thực hiện không để gắn log vào
+            if (current_cmd_id != -1) {
+                updateCommandStatus(current_cmd_id, "ERROR", "Auto-Report: " + alertReason);
+            } else {
+                Serial.println("[ALARM] No active command ID to log this error to Cloud.");
+            }
+        }
+    }
+}
+
 void Send_CMD_Reset() {
-    Serial.println("CMD: Sending Reset...");
+ Serial.println("CMD: Sending Reset...");
+    
+    // 1. Xóa buffer cũ
+    while(Serial2.available()) Serial2.read();
+    
+    // 2. Gửi lệnh reset
     Serial2.print("rst");
-    updateCommandStatus(current_cmd_id, "DONE", "STM32 will be reset");
+
+    // 3. Chờ phản hồi (Timeout 2 giây cho chắc)
+    unsigned long start_time = millis();
+    bool received = false;
+    String response = "";
+
+    while (millis() - start_time < 2000) {
+        if (Serial2.available()) {
+            response = Serial2.readStringUntil('\n'); 
+            response.trim();
+            if (response.length() > 0) {
+                received = true;
+                break;
+            }
+        }
+    }
+
+    // 4. Kiểm tra và Gửi Log lên Web
+    if (received && response == "rst:ok") {
+        Serial.println("STM32 Ack: " + response);
+        updateCommandStatus(current_cmd_id, "DONE", "STM32 Reset Confirmed");
+    } 
+    else {
+        Serial.println("Reset Timeout (STM32 maybe dead or resetting)");
+        // Vẫn báo DONE để web biết lệnh đã đi, nhưng kèm cảnh báo
+        updateCommandStatus(current_cmd_id, "DONE", "Command sent (No ACK from STM32)");
+    }
 }
 
 // FOTA STATE MACHINE
@@ -308,7 +372,7 @@ void ota_statemachine_handler() {
             if (st == ETX_OTA_ACK) {
                 esp_ota_state = next_state_on_ack;
             } else {
-                Serial.println("[FOTA] Error: NACK / Bad Packet / CRC Fail!");
+                Serial.println("[FOTA] Error: NACK / Bad Packet / CRC Fail! Rollback to previous version");
                 ota_last_msg = "NACK / Bad Packet / CRC Fail!";
                 esp_ota_state = OTA_STATE_FAILED;
             }
