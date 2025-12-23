@@ -173,7 +173,7 @@ void Send_CMD_Check_Version() {
         Serial.print("STM32 Responded: ");
         Serial.println(response);
 
-        if (response.startsWith("ver:")) {
+        if (response.startsWith("Application Version:")) {
             Serial.println("[RESULT] STM32 OK!");
             updateCommandStatus(current_cmd_id, "DONE", response);
         } else {
