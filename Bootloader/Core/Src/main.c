@@ -13,6 +13,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 #include "etx_ota_update.h"
 /* USER CODE END Includes */
 
@@ -56,6 +57,7 @@ static void Check_Boot_Reason(bool *goto_ota, bool *is_factory_reset);
 static bool Check_Hardware_Trigger(void);
 static void Enter_OTA_Mode(void);
 static void Enter_App_Mode(bool is_factory_reset);
+static void Check_Watchdog_Reset(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -89,6 +91,8 @@ int main(void)
 
   Print_Banner();
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); // LED ON indicating Bootloader
+  Check_Watchdog_Reset();
+
   bool goto_ota_mode = false;
   bool is_factory_reset = false;
 
@@ -126,6 +130,63 @@ int main(void)
 /* ============================================================================
    HELPER FUNCTIONS IMPLEMENTATION
    ============================================================================ */
+static void Check_Watchdog_Reset(void)
+{
+    // Kiểm tra cờ IWDGRST (Independent Watchdog Reset Flag)
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST))
+    {
+        printf("\r System Reset detected by IWDG (App Crash)!\r\n");
+        __HAL_RCC_CLEAR_RESET_FLAGS();
+
+        ETX_GNRL_CFG_ *flash_cfg = (ETX_GNRL_CFG_*) (ETX_CONFIG_FLASH_ADDR);
+        ETX_GNRL_CFG_ new_cfg;
+        memcpy(&new_cfg, flash_cfg, sizeof(ETX_GNRL_CFG_));
+
+        bool need_rollback = false;
+        uint8_t target_slot = 0;
+
+
+        if (new_cfg.slot_table[0].is_this_slot_active == 1)
+        {
+            // Nếu Slot 0 lỗi -> Quay về Slot 1
+            if (new_cfg.slot_table[1].is_this_slot_not_valid == 0) {
+                target_slot = 1;
+                need_rollback = true;
+            }
+        }
+        else if (new_cfg.slot_table[1].is_this_slot_active == 1)
+        {
+            // Nếu Slot 1 lỗi -> Quay về Slot 0
+            if (new_cfg.slot_table[0].is_this_slot_not_valid == 0) {
+                target_slot = 0;
+                need_rollback = true;
+            }
+        }
+
+        if (need_rollback)
+        {
+            printf("Flagging Slot %d for Emergency Rollback...\r\n", target_slot);
+            char *msg = "ALERT:ROLLBACK_WDG\n";
+            HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 100);
+            new_cfg.slot_table[target_slot].should_we_run_this_fw = 1;
+
+            write_cfg_to_flash(&new_cfg);
+
+            printf("Flags Updated. Resetting system to perform Rollback...\r\n");
+            HAL_Delay(100);
+            HAL_NVIC_SystemReset();
+        }
+        else
+        {
+            printf(">> Rollback skipped (No valid backup).\r\n");
+        }
+    }
+    else
+    {
+        __HAL_RCC_CLEAR_RESET_FLAGS();
+    }
+}
+
 
 static void Print_Banner(void)
 {

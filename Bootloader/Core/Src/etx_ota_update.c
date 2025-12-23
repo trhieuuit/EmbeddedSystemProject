@@ -40,7 +40,7 @@ static void etx_ota_send_resp( uint8_t type );
 static HAL_StatusTypeDef write_data_to_slot( uint8_t slot_num, uint8_t *data, uint16_t data_len, bool is_first_block );
 static HAL_StatusTypeDef write_data_to_flash_app( uint8_t *data, uint32_t data_len );
 static uint8_t get_available_slot_number( void );
-static HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg );
+HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg );
 static uint32_t calculate_crc32(const uint8_t *data, uint32_t length);
 
 //Hàm tính CRC32
@@ -622,6 +622,9 @@ void load_new_app( void )
              cfg.slot_table[backup_slot].is_this_slot_active = 1u;
              write_cfg_to_flash(&cfg);
 
+             char *msg = "ALERT:ROLLBACK_CRC\n";
+             HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 100);
+
              printf(">> Resetting system...\r\n");
              HAL_Delay(100);
              HAL_NVIC_SystemReset();
@@ -642,7 +645,7 @@ void load_new_app( void )
    printf("Done!!!\r\n");
 }
 
-static HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg )
+ HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg )
 {
   HAL_StatusTypeDef ret;
 

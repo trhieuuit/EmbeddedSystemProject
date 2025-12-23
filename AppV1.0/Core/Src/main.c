@@ -2,28 +2,18 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
+  * @brief          : Main program body for Application (Refactored & CubeMX Friendly)
   ******************************************************************************
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include "etx_ota_update.h"
 /* USER CODE END Includes */
 
@@ -35,7 +25,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define MAJOR 1	 //App major version number
-#define MINOR 0  //App minor version number
+#define MINOR 9  //App minor version number
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -44,74 +34,132 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+IWDG_HandleTypeDef hiwdg;
+
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 const uint8_t App_Version[2] = {MAJOR,MINOR};
 uint8_t rx_buf[4];
+
+// Cờ báo hiệu (Flag) để chuyển xử lý từ Ngắt ra Main loop (Safe Mode)
+volatile bool flag_ota_update_req = false;
+volatile bool flag_system_reset_req = false;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USART3_UART_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART3_UART_Init(void);
+static void MX_IWDG_Init(void);
 /* USER CODE BEGIN PFP */
 static HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg );
+
+// --- MODULES TÁCH RIÊNG ---
+void OTA_Task_Handler(void);   // Module xử lý OTA/Reset
+void App_Main_Task(void);      // Module ứng dụng chính (LED, Sensor...)
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+  * @brief  Rx Transfer completed callback.
+  * @param  huart UART handle.
+  * @retval None
+  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2)
   {
+    // 1. Nhận lệnh OTA
     if( !strncmp("ota", (char*)rx_buf, 3) )
     {
-      printf("Received OTA Request from Web Server\r\n");
-
-      /* Update the reboot reason as OTA request */
-
-      /* Read the configuration */
-      ETX_GNRL_CFG_ cfg;
-      memcpy( &cfg, (ETX_GNRL_CFG_*) (ETX_CONFIG_FLASH_ADDR), sizeof(ETX_GNRL_CFG_) );
-
-      //update the reboot reason
-      cfg.reboot_cause = ETX_OTA_REQUEST;
-
-      /* write back the updated config */
-      write_cfg_to_flash( &cfg );
-
-      // Reset the controller
-      HAL_NVIC_SystemReset();
+       //Bật cờ
+       flag_ota_update_req = true;
     }
+    // 2. Nhận lệnh Check Version
     else if ( !strncmp("ver", (char*)rx_buf, 3) )
     {
-
-        char response[20];
-        // Lấy từ biến toàn cục
-        sprintf(response, "Application Version: %d.%d\r\n", MAJOR, MINOR);
-
-        // Gửi phản hồi lại cho ESP32
+        char response[32];
+        sprintf(response, "Ver:%d.%d\n", MAJOR, MINOR);
         HAL_UART_Transmit(&huart2, (uint8_t*)response, strlen(response), 100);
-
-        //
-        HAL_UART_Receive_IT(&huart2, rx_buf, 3);
     }
+    // 3. Nhận lệnh Reset
     else if ( !strncmp("rst", (char*)rx_buf, 3) )
 	{
-    	 printf("Received Reset Request from Web Server\r\n");
-		// Chỉ reset hệ thống
-		HAL_NVIC_SystemReset();
+         flag_system_reset_req = true;
 	}
 
-    else
-    {
-      HAL_UART_Receive_IT(&huart2, rx_buf, 3);
-    }
+    // Tiếp tục nhận dữ liệu mới
+    HAL_UART_Receive_IT(&huart2, rx_buf, 3);
+
+    // Xóa buffer an toàn
     memset(rx_buf, 0, sizeof(rx_buf));
   }
+}
+
+/**
+  * @brief  Module 1: Xử lý các yêu cầu hệ thống (OTA, Reset)
+  * Hàm này được gọi liên tục trong Main Loop.
+  */
+void OTA_Task_Handler(void)
+{
+    // --- XỬ LÝ LỆNH RESET ---
+    if (flag_system_reset_req)
+    {
+        printf("[SYS] Processing Reset Request...\r\n");
+
+
+        HAL_IWDG_Refresh(&hiwdg);
+
+        char *ack = "rst:ok\n";
+        HAL_UART_Transmit(&huart2, (uint8_t*)ack, strlen(ack), 100);
+        HAL_Delay(100);
+
+        HAL_NVIC_SystemReset();
+    }
+
+    // --- XỬ LÝ LỆNH OTA UPDATE ---
+    if (flag_ota_update_req)
+    {
+        printf("[SYS] Processing OTA Request...\r\n");
+        HAL_IWDG_Refresh(&hiwdg);
+
+        // Khóa ngắt để ghi Flash an toàn
+        __disable_irq();
+
+        ETX_GNRL_CFG_ cfg;
+        memcpy( &cfg, (ETX_GNRL_CFG_*) (ETX_CONFIG_FLASH_ADDR), sizeof(ETX_GNRL_CFG_) );
+        cfg.reboot_cause = ETX_OTA_REQUEST;
+
+        if (write_cfg_to_flash( &cfg ) == HAL_OK)
+        {
+            HAL_NVIC_SystemReset();
+        }
+        else
+        {
+            __enable_irq(); // Mở lại ngắt nếu lỗi
+            printf("[SYS] Config Write Error!\r\n");
+            flag_ota_update_req = false; // Xóa cờ để chạy tiếp
+        }
+    }
+}
+
+/**
+  * @brief  Module 2: Ứng dụng chính của người dùng
+  */
+void App_Main_Task(void)
+{
+    static uint32_t last_toggle = 0;
+
+    if (HAL_GetTick() - last_toggle >= 500)
+    {
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_7);
+        last_toggle = HAL_GetTick();
+    }
 }
 /* USER CODE END 0 */
 
@@ -121,8 +169,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
+    // [BẮT BUỘC] Dời Vector Table về địa chỉ App
 	SCB->VTOR = 0x08020000;
 	__enable_irq();
   /* USER CODE END 1 */
@@ -140,15 +188,16 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  __HAL_RCC_CLEAR_RESET_FLAGS();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART3_UART_Init();
   MX_USART2_UART_Init();
+  MX_USART3_UART_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
-  printf("Starting Application (%d.%d)\n", App_Version[0], App_Version[1] );
+  printf("Starting Application (%d.%d)\n", App_Version[0], App_Version[1]);
   HAL_UART_Receive_IT(&huart2, rx_buf, 3);
   /* USER CODE END 2 */
 
@@ -159,10 +208,16 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  HAL_GPIO_WritePin( GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); //LED on
-	  HAL_Delay(1000); //1second delay
-	  HAL_GPIO_WritePin( GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //LED off
-	  HAL_Delay(1000); //1second delay
+
+      // 1. Chạy module quản lý hệ thống (OTA, Reset)
+      OTA_Task_Handler();
+
+      // 2. Chạy module ứng dụng
+      App_Main_Task();
+
+      // 3. Giám sát hệ thống (Watchdog Refresh)
+      HAL_IWDG_Refresh(&hiwdg);
+
   }
   /* USER CODE END 3 */
 }
@@ -184,9 +239,10 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -206,6 +262,34 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief IWDG Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_IWDG_Init(void)
+{
+
+  /* USER CODE BEGIN IWDG_Init 0 */
+
+  /* USER CODE END IWDG_Init 0 */
+
+  /* USER CODE BEGIN IWDG_Init 1 */
+
+  /* USER CODE END IWDG_Init 1 */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_64;
+  hiwdg.Init.Reload = 3000;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN IWDG_Init 2 */
+
+  /* USER CODE END IWDG_Init 2 */
+
 }
 
 /**
@@ -317,85 +401,47 @@ int fputc(int ch, FILE *f)
 	return ch;
 }
 
-/**
-  * @brief Write the configuration to flash
-  * @param cfg config structure
-  * @retval none
-  */
 static HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg )
 {
   HAL_StatusTypeDef ret;
-
   do
   {
-    if( cfg == NULL )
-    {
-      ret = HAL_ERROR;
-      break;
-    }
+    if( cfg == NULL ) { ret = HAL_ERROR; break; }
 
     ret = HAL_FLASH_Unlock();
-    if( ret != HAL_OK )
-    {
-      break;
-    }
+    if( ret != HAL_OK ) break;
 
-    //Check if the FLASH_FLAG_BSY.
     FLASH_WaitForLastOperation( HAL_MAX_DELAY );
 
-    //Erase the Flash
     FLASH_EraseInitTypeDef EraseInitStruct;
     uint32_t SectorError;
 
+    // Đảm bảo SECTOR_4 đúng với địa chỉ Config của bạn
     EraseInitStruct.TypeErase     = FLASH_TYPEERASE_SECTORS;
     EraseInitStruct.Sector        = FLASH_SECTOR_4;
-    EraseInitStruct.NbSectors     = 1;                    //erase only sector 4
+    EraseInitStruct.NbSectors     = 1;
     EraseInitStruct.VoltageRange  = FLASH_VOLTAGE_RANGE_3;
 
-    // clear all flags before you write it to flash
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR |
-                FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR);
+    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR);
 
     ret = HAL_FLASHEx_Erase( &EraseInitStruct, &SectorError );
-    if( ret != HAL_OK )
-    {
-      break;
-    }
+    if( ret != HAL_OK ) break;
 
-    //write the configuration
     uint8_t *data = (uint8_t *) cfg;
     for( uint32_t i = 0u; i < sizeof(ETX_GNRL_CFG_); i++ )
     {
-      ret = HAL_FLASH_Program( FLASH_TYPEPROGRAM_BYTE,
-                               ETX_CONFIG_FLASH_ADDR + i,
-                               data[i]
-                             );
-      if( ret != HAL_OK )
-      {
-        printf("Slot table Flash Write Error\r\n");
-        break;
-      }
+      ret = HAL_FLASH_Program( FLASH_TYPEPROGRAM_BYTE, ETX_CONFIG_FLASH_ADDR + i, data[i] );
+      if( ret != HAL_OK ) break;
     }
 
-    //Check if the FLASH_FLAG_BSY.
     FLASH_WaitForLastOperation( HAL_MAX_DELAY );
-
-    if( ret != HAL_OK )
-    {
-      break;
-    }
+    if( ret != HAL_OK ) break;
 
     ret = HAL_FLASH_Lock();
-    if( ret != HAL_OK )
-    {
-      break;
-    }
   }while( false );
 
   return ret;
 }
-
-
 
 /* USER CODE END 4 */
 
@@ -416,7 +462,7 @@ void Error_Handler(void)
 #ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
+  * where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None

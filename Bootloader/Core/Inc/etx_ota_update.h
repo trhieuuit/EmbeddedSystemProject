@@ -37,6 +37,7 @@
 #define ETX_OTA_REQUEST           ( 0xDEADBEEF )      //OTA request by application
 #define ETX_LOAD_PREV_APP         ( 0xFACEFADE )      //App requests to load the previous version
 
+
 /*
  * Exception codes
  */
@@ -188,6 +189,8 @@ typedef struct
   uint8_t   eof;
 }__attribute__((packed)) ETX_OTA_RESP_;
 
+// Thêm dòng này:
+HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg );
 ETX_OTA_EX_ etx_ota_download_and_flash( void );
 void load_new_app( void );
 #endif /* INC_ETX_OTA_UPDATE_H_ */
